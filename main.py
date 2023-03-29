@@ -45,9 +45,8 @@ def train(loop_index, env):
     # 开始训练循环
     for i in range(MAX_ROUNDS):
         print(f"Training round {i + 1}/{MAX_ROUNDS}")
-        
         # 发射导弹并获取总奖励
-        rewards = env.launch_missiles(q_table=q_learning)
+        rewards = env.launch_missiles()
         available_actions = env.get_available_actions()
         # 修改状态表示以包含导弹位置、高度和状态
         state = [env.current_round, 0, 0]
@@ -55,7 +54,7 @@ def train(loop_index, env):
         action = None
         for missile in env.missile_list:
             if missile.get_status() == 0:
-                state[1] = missile.position
+                state[1] = missile.distance
                 state[2] = missile.height
                 action = q_learning.choose_action(state, available_actions)
                 missile_index = int(action)
@@ -66,19 +65,23 @@ def train(loop_index, env):
         next_state = [env.current_round + 1, 0, 0]
         for missile in env.missile_list:
             if missile.get_status() == 0:
-                next_state[1] = missile.position
+                next_state[1] = missile.distance
                 next_state[2] = missile.height
                 break
         if action is not None:
             q_learning.update_table(state, action, sum(rewards), next_state, env.get_available_actions())
         # 更新游戏轮次
         env.set_current_round(env.current_round + 1)
+        rewards = env.launch_missiles()
     # 训练结束，输出最终结果
     missile_list, intercepted_missiles, escaped_missiles, locked_missiles = env.remove_missiles(q_learning)  # 修改为 q_learning 实例
-    score = env.get_score()
+    score = env.get_total_reward()
+    
     print(f"Final score: {score}")
+    print(f"missile_list: {[missile.status for missile in missile_list]}")
     print(f"Intercepted missiles: {[missile.number for missile in intercepted_missiles]}")
     print(f"Escaped missiles: {[missile.number for missile in escaped_missiles]}")
+    print(f"locked_missiles: {[missile.number for missile in locked_missiles]}")
     # 保存模型
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     model_file_path = f"model/model_{env.get_current_round()}_{current_time}.pt"
@@ -88,19 +91,18 @@ def train(loop_index, env):
 if __name__ == '__main__':
     filename = None
     env = Environment([])  # 在训练循环之前创建 env 实例
-    for i in range(1):
+    for i in range(20):
         print(f"Training loop {i + 1}")
 
         # 每100次训练更换一次CSV文件
-        if i % 100 == 0:
+        if i % 10 == 0:
             num_groups = 5
             num_missiles = 120
             missile_list = generate_missile_list(num_missiles, num_groups, i // 100)  # 更新file_index的计算
-            filename = f'missiles_{i // 100 + 1}.csv'  # 修改文件名生成规则
+            filename = f'missiles_{i // 10 + 1}.csv'  # 修改文件名生成规则
             save_missile_list_to_csv(missile_list, filename, i // 100)  # 更新file_index的计算
             print(f"Using CSV file: {filename}")  # 将打印使用的CSV文件名移动到此处
 
         missile_list_copy = [missile.clone() for missile in missile_list]  # 创建导弹列表的深拷贝
         env.reset(missile_list_copy)  # 重置环境状态
         train(i, env)
-    

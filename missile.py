@@ -20,6 +20,9 @@ class Missile:
 
     def get_status(self):
         return self.status
+    
+    def set_number(self, number):
+        self.number = number
 
     def set_status(self, status):
         self.status = status

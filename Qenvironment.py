@@ -8,7 +8,7 @@ MISSILE_STATUS = {0: "Flying", 1: "Locked", 2: "Intercepted", 3: "Escaped"}
 max_lock_missiles = 10 # 每轮锁定导弹的上限
 
 class Environment:
-    def __init__(self, missile_list):
+    def __init__(self, missile_list, q_learning=None):
         self.missile_list = missile_list
         self.current_round = 0
         self.intercepted_missiles = []
@@ -16,26 +16,38 @@ class Environment:
         self.escaped_missiles = []
         self.num_states = len(missile_list)
         self.total_reward = 0  # 用于存储累计奖励
+        self.q_learning = q_learning
+
     def get_missile_list(self):
         return self.missile_list
     def get_current_round(self):
         return self.current_round
     def set_current_round(self, round):
         self.current_round = round
-    def launch_missiles(self, q_table=None):
+
+    def launch_missiles(self):
         game_duration = 16000
         rewards = []  # 创建一个奖励列表
         total_reward = 0
         for elapsed_time in range(game_duration):
             self.update_missile_positions()
             self.update_missile_statuses()
-            self.lock_missiles(q_table=q_table)
+            self.lock_missiles()
+
+             # 在每个回合的开始时检查导弹是否被拦截
+            for missile in self.missile_list:
+                if missile.get_status() == 1 and self.current_round >= missile.get_intercept_round():
+                    distance_to_origin = math.sqrt(missile.x ** 2 + missile.y ** 2)
+                    if distance_to_origin < 2:
+                        missile.set_status(3)
+                    else:
+                        missile.set_status(2)
             # Q-learning 策略选择动作
-            if q_table is not None and elapsed_time % 8 == 7:
+            if self.q_learning is not None and elapsed_time % 8 == 7:
+                self.lock_missiles()
                 state = [self.current_round] + [m.get_status() for m in self.missile_list]
                 actions = [str(m.number) for m in self.missile_list if m.get_status() == 0]
-                action = q_table.choose_action(state, actions)
-                # action_missile = next((m for m in self.missile_list if m.number == int(action) and m.get_status() == 0), None)
+                action = self.q_learning.choose_action(state, actions)
                 if action is None:  # 检查 action 是否为 None
                     continue  # 如果为 None，则跳过当前迭代
                 action_missile = next((m for m in self.missile_list if m.number == int(action) and m.get_status() == 0), None)
@@ -63,7 +75,7 @@ class Environment:
                     print(f"Round {self.current_round}: Total reward = {total_reward}")  # 在每个回合打印总奖励
                     next_state = [self.current_round + 1] + [m.get_status() for m in self.missile_list]
                     next_available_actions = [str(m.number) for m in self.missile_list if m.get_status() == 0]
-                    q_table.update_table(state, action, q_reward, next_state, next_available_actions=next_available_actions)
+                    self.q_learning.update_table(state, action, q_reward, next_state, next_available_actions=next_available_actions)
             self.current_round += 1
             # 判断游戏是否结束
             if self.is_end():
@@ -72,7 +84,7 @@ class Environment:
 
     def get_total_reward(self):
         return self.total_reward
-
+    
     def calculate_reward(self, missile):
         reward = 0
         height = missile.get_height()
@@ -103,54 +115,46 @@ class Environment:
                 missile.set_position(new_positions[i][0].item(), new_positions[i][1].item())
                 missile.distance = distances[i].item()
 
-    def lock_missiles(self, q_table=None, actions=None):
+    def lock_missiles(self, actions=None):
         active_missiles = [missile for missile in self.missile_list if
-                           missile.get_status() in [0, 1] and missile.launch_round <= self.current_round]
+                           missile.get_status() == 0 and missile.launch_round <= self.current_round]
         if not active_missiles:
             return
-        if q_table is not None and actions is not None:
+        if self.q_learning is not None and actions is not None:
             if not actions:
                 return
             num_missiles_to_lock = min(len(actions), max_lock_missiles)
-            #计算每个可用导弹的 Q-value，并按照从大到小的顺序排序。选出 Q-value 最大的 num_missiles_to_lock 个导弹的索引。
-            missile_indexes = np.argsort([q_table.get_q_value(str(self.current_round), str(m)) for m in actions])[::-1][
-                              :num_missiles_to_lock]
-            for missile_index in missile_indexes:
-                missile_number = int(actions[missile_index])
-                missile = next((m for m in self.missile_list if m.number == missile_number), None)
+            chosen_actions = []
+            for _ in range(num_missiles_to_lock):
+                state = (self.current_round, len(active_missiles), len(actions))
+                action = self.q_learning.choose_action(state, actions)
+                chosen_actions.append(action)
+                actions.remove(action)
+
+            for action in chosen_actions:
+                missile_number = int(action)
+                missile = next(
+                    (m for m in self.missile_list if m.number == missile_number), None)
                 if missile is not None and missile.get_status() == 0:
-                    distance_to_origin = math.sqrt(missile.x ** 2 + missile.y ** 2)
+                    distance_to_origin = math.sqrt(
+                        missile.x ** 2 + missile.y ** 2)
                     if distance_to_origin < 2:
                         missile.set_status(3)
                     else:
                         missile.set_status(1)
                     intercept_time = distance_to_origin / (2 * missile.speed)
                     intercept_round = int(intercept_time)
-                    missile.set_intercept_round(self.current_round + intercept_round)
+                    missile.set_intercept_round(
+                        self.current_round + intercept_round)
+                    
                     # 更新Q值
                     if missile.get_status() == 1:
-                        q_value = q_table.get_q_value(str(self.current_round), str(missile.number))
+                        state = (self.current_round, len(active_missiles), len(actions) + 1)
+                        next_state = (self.current_round, len(active_missiles) - 1, len(actions))
+                        next_available_actions = actions.copy()
+                        next_available_actions.append(action)
                         reward = self.get_intercept_success_rate(missile) - 1
-                        q_table.update_q_value(str(self.current_round), str(missile.number), q_value, reward)
-        else:
-            actions = []
-            for missile in self.missile_list:
-                if missile.get_status() == 0:
-                    actions.append(str(missile.number))
-            num_missiles_to_lock = min(len(actions), max_lock_missiles)
-            missile_indexes = np.argsort([random.random() for i in range(len(actions))])[::-1][:num_missiles_to_lock]
-            for missile_index in missile_indexes:
-                missile_number = int(actions[missile_index])
-                missile = next((m for m in self.missile_list if m.number == missile_number), None)
-                if missile is not None and missile.get_status() == 0:
-                    distance_to_origin = math.sqrt(missile.x ** 2 + missile.y ** 2)
-                    if distance_to_origin < 2:
-                        missile.set_status(3)
-                    else:
-                        missile.set_status(1)
-                    intercept_time = distance_to_origin / (2 * missile.speed)
-                    intercept_round = int(intercept_time)
-                    missile.set_intercept_round(self.current_round + intercept_round)
+                        self.q_learning.update_table(state, action, reward, next_state, next_available_actions)
 
     def update_missile_statuses(self):
         for missile in self.missile_list:
@@ -215,23 +219,6 @@ class Environment:
         for missile in self.missile_list:
             state.append(missile.status)
         return tuple(state)
-
-    def get_score(self):
-        score = 0
-        for missile in self.intercepted_missiles:
-            height = missile.get_height()
-            status = missile.get_status()
-            if status == 2 and height == 1:
-                score += 3
-            elif status == 2 and height == 2:
-                score += 2
-            elif status == 3 and height == 3:
-                score += 1
-            elif status == 3:
-                score -= 10
-            else:  # 拦截失败
-                score -= 1
-        return score
 
     def get_intercepted_missiles(self):
         return self.intercepted_missiles

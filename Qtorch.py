@@ -64,12 +64,17 @@ class QLearning:
         action_tensor = torch.tensor(int(action), dtype=torch.int64).to(self.device).unsqueeze(0)
         reward_tensor = torch.tensor(reward, dtype=torch.float32).to(self.device)
         next_state_tensor = torch.tensor([next_state[0], next_state[1], next_state[2]], dtype=torch.float32).to(self.device).unsqueeze(0)
-        next_available_actions_tensor = torch.tensor([int(a) for a in next_available_actions if int(a) < self.num_actions])
+        # next_available_actions_tensor = torch.tensor([int(a) for a in next_available_actions if int(a) < self.num_actions])
+        next_available_actions_tensor = torch.tensor(
+            [int(a) for a in next_available_actions if int(a) < self.num_actions], dtype=torch.long)
         q_values = self.q_network(state_tensor)
         next_q_values = self.q_network(next_state_tensor)
         
         # 计算目标 Q 值
-        max_next_q_value = torch.max(next_q_values[:, next_available_actions_tensor])
+        if len(next_available_actions) > 0:
+            max_next_q_value = torch.max(next_q_values[:, next_available_actions_tensor])
+        else:
+            max_next_q_value = 0
         target_q_value = reward_tensor + self.gamma * max_next_q_value
         target_q_values = q_values.clone().detach()
         target_q_values[0, action_tensor] = target_q_value
